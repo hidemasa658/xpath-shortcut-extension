@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "XPath Shortcut",
+  "version": "2.0.0",
+  "description": "ショートカットキーでXPath/CSS指定した要素をクリック",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "XPath Shortcut 表示/非表示"
+  },
+  "minimum_chrome_version": "114"
+}

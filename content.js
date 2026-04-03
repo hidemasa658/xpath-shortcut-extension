@@ -61,6 +61,8 @@ function keyEventToString(e) {
   return p.join('+');
 }
 
+let macroRunning = false;
+
 function onKeyDown(e) {
   if (shortcuts.length === 0) return;
   const pressed = keyEventToString(e);
@@ -69,8 +71,46 @@ function onKeyDown(e) {
   if (!match) return;
   e.preventDefault();
   e.stopPropagation();
-  const el = findElement(match.xpath);
-  if (el) { el.click(); }
+
+  // ステップがあれば連続実行
+  if (match.steps && match.steps.length > 0) {
+    if (macroRunning) return; // 二重実行防止
+    runMacro(match);
+  } else {
+    const el = findElement(match.xpath);
+    if (el) el.click();
+  }
+}
+
+async function runMacro(sc) {
+  macroRunning = true;
+  const allSteps = [{ xpath: sc.xpath, delay: 0 }];
+  sc.steps.forEach(s => allSteps.push(s));
+  await executeMacroFrom(allSteps, 0);
+}
+
+async function executeMacroFrom(allSteps, startIdx) {
+  macroRunning = true;
+  for (let i = startIdx; i < allSteps.length; i++) {
+    const step = allSteps[i];
+    // 復帰時の待機（最初のステップ以外）
+    if (step.delay > 0) {
+      await new Promise(r => setTimeout(r, step.delay * 1000));
+    }
+    // 次ステップ位置を保存（遷移に備える）
+    if (i + 1 < allSteps.length) {
+      await chrome.storage.local.set({
+        macroState: { allSteps, currentStep: i + 1 }
+      });
+    } else {
+      // 最終ステップ: クリア予約
+      await chrome.storage.local.remove('macroState');
+    }
+    // クリック実行
+    const el = findElement(step.xpath);
+    if (el) el.click();
+  }
+  macroRunning = false;
 }
 
 function loadShortcuts() {
@@ -84,6 +124,19 @@ function loadShortcuts() {
 loadShortcuts();
 document.addEventListener('keydown', onKeyDown, true);
 
+// マクロ復帰チェック（ページ遷移後の続行）
+if (window === window.top) {
+  chrome.storage.local.get('macroState', (data) => {
+    if (chrome.runtime.lastError || !data.macroState) return;
+    const { allSteps, currentStep } = data.macroState;
+    if (currentStep < allSteps.length) {
+      executeMacroFrom(allSteps, currentStep);
+    } else {
+      chrome.storage.local.remove('macroState');
+    }
+  });
+}
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'shortcuts-updated') loadShortcuts();
 });
@@ -91,26 +144,85 @@ chrome.runtime.onMessage.addListener((msg) => {
 // ========== ピッカー（全フレーム共通） ==========
 let picking = false, pickIdx = -1, hlEl = null;
 
+function xpathStr(s) {
+  if (!s.includes('"')) return '"' + s + '"';
+  if (!s.includes("'")) return "'" + s + "'";
+  return 'concat("' + s.replace(/"/g, '",\'"\',"') + '")';
+}
+
+function xpathCount(xp, doc) {
+  try {
+    return doc.evaluate(xp, doc, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength;
+  } catch(e) { return 0; }
+}
+
 function genSelector(el) {
-  if (el.id) return '#' + CSS.escape(el.id);
-  if (el.classList.length > 0) {
-    const s = el.tagName.toLowerCase() + '.' + Array.from(el.classList).map(c => CSS.escape(c)).join('.');
-    try { if (document.querySelectorAll(s).length === 1) return s; } catch(e) {}
+  const doc = el.ownerDocument;
+  const tag = el.tagName.toLowerCase();
+
+  // 1. ID
+  if (el.id) return '//*[@id=' + xpathStr(el.id) + ']';
+
+  // 2. 一意な属性
+  const attrs = ['name','data-testid','data-id','aria-label','placeholder',
+    'title','type','for','role','value','href','action','src'];
+  for (const a of attrs) {
+    const v = el.getAttribute(a);
+    if (!v || v.length > 80) continue;
+    const xp = '//' + tag + '[@' + a + '=' + xpathStr(v) + ']';
+    if (xpathCount(xp, doc) === 1) return xp;
   }
+
+  // 3. 属性の組み合わせ（type + name など）
+  for (let a = 0; a < attrs.length; a++) {
+    const v1 = el.getAttribute(attrs[a]);
+    if (!v1) continue;
+    for (let b = a + 1; b < attrs.length; b++) {
+      const v2 = el.getAttribute(attrs[b]);
+      if (!v2) continue;
+      const xp = '//' + tag + '[@' + attrs[a] + '=' + xpathStr(v1) + ' and @' + attrs[b] + '=' + xpathStr(v2) + ']';
+      if (xpathCount(xp, doc) === 1) return xp;
+    }
+  }
+
+  // 4. テキスト（ボタン・リンク等）
+  const txt = (el.textContent || '').trim().replace(/\s+/g, ' ');
+  if (txt.length > 0 && txt.length < 50) {
+    const xp1 = '//' + tag + '[normalize-space()=' + xpathStr(txt) + ']';
+    if (xpathCount(xp1, doc) === 1) return xp1;
+    // 部分一致
+    if (txt.length >= 3) {
+      const short = txt.substring(0, 30);
+      const xp2 = '//' + tag + '[contains(normalize-space(),' + xpathStr(short) + ')]';
+      if (xpathCount(xp2, doc) === 1) return xp2;
+    }
+  }
+
+  // 5. クラス名（一意なもの）
+  for (const cls of el.classList || []) {
+    if (cls.length < 3) continue;
+    const xp = '//' + tag + '[contains(@class,' + xpathStr(cls) + ')]';
+    if (xpathCount(xp, doc) === 1) return xp;
+  }
+
+  // 6. パスベース（ID付き祖先からの相対パス）
   const parts = [];
   let cur = el;
-  while (cur && cur.nodeType === 1 && cur !== document.documentElement) {
-    let tag = cur.tagName.toLowerCase();
-    if (cur.id) { parts.unshift('#' + CSS.escape(cur.id)); break; }
+  while (cur && cur.nodeType === 1 && cur !== doc.documentElement) {
+    let step = cur.tagName.toLowerCase();
+    if (cur !== el && cur.id) {
+      parts.unshift('*[@id=' + xpathStr(cur.id) + ']');
+      return '//' + parts.join('/');
+    }
     const parent = cur.parentElement;
     if (parent) {
       const sibs = Array.from(parent.children).filter(c => c.tagName === cur.tagName);
-      if (sibs.length > 1) tag += ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')';
+      if (sibs.length > 1) step += '[' + (sibs.indexOf(cur) + 1) + ']';
     }
-    parts.unshift(tag);
+    parts.unshift(step);
     cur = parent;
   }
-  return parts.join(' > ');
+  return '//' + parts.join('/');
 }
 
 function showHL(el) {
@@ -233,8 +345,8 @@ wrapper.innerHTML = `
     background: #fff;
     border-radius: 10px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-    width: 280px;
-    max-height: 420px;
+    width: 320px;
+    max-height: 480px;
     overflow-y: auto;
     padding: 10px;
     font-size: 11px;
@@ -289,6 +401,52 @@ wrapper.innerHTML = `
     padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 9px;
   }
   .sc-card .del-btn:hover { background: #fbe9e7; }
+
+  .steps-area {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed #ddd;
+  }
+  .steps-area .step-title {
+    font-size: 9px; color: #1a73e8; font-weight: bold; margin-bottom: 4px;
+  }
+  .step-row {
+    display: flex; gap: 3px; align-items: center; margin-bottom: 4px;
+  }
+  .step-row .step-num {
+    font-size: 8px; color: #999; width: 10px; flex-shrink: 0; text-align: center;
+  }
+  .step-row .delay-inp {
+    width: 36px; padding: 3px 4px; border: 1px solid #ccc; border-radius: 3px;
+    font-size: 10px; text-align: center;
+  }
+  .step-row .delay-inp:focus { outline: none; border-color: #1a73e8; }
+  .step-row .delay-label { font-size: 8px; color: #888; flex-shrink: 0; }
+  .step-row .step-sel-inp {
+    flex: 1; padding: 3px 5px; border: 1px solid #ccc; border-radius: 3px;
+    font-size: 10px; min-width: 0;
+  }
+  .step-row .step-sel-inp:focus { outline: none; border-color: #1a73e8; }
+  .step-row .step-pick-btn {
+    flex-shrink: 0; width: 20px; height: 20px;
+    border: 1px solid #1a73e8; border-radius: 3px;
+    background: #e8f0fe; color: #1a73e8; cursor: pointer;
+    font-size: 11px; display: flex; align-items: center; justify-content: center;
+  }
+  .step-row .step-pick-btn:hover { background: #d2e3fc; }
+  .step-row .step-del-btn {
+    flex-shrink: 0; width: 20px; height: 20px;
+    border: 1px solid #e53935; border-radius: 3px;
+    background: none; color: #e53935; cursor: pointer;
+    font-size: 11px; display: flex; align-items: center; justify-content: center;
+  }
+  .step-row .step-del-btn:hover { background: #fbe9e7; }
+  .add-step-btn {
+    width: 100%; padding: 3px; background: none; color: #1a73e8;
+    border: 1px dashed #1a73e8; border-radius: 3px; cursor: pointer;
+    font-size: 9px; margin-top: 2px;
+  }
+  .add-step-btn:hover { background: #e8f0fe; }
 
   .add-btn {
     width: 100%; padding: 6px; background: #1a73e8; color: #fff;
@@ -362,16 +520,36 @@ function renderPanel() {
   let html = `<div class="panel-header"><h2>XPath Shortcut</h2><button class="panel-close" id="panel-close">×</button></div>`;
 
   shortcuts.forEach((sc, i) => {
+    const steps = sc.steps || [];
+    let stepsHtml = '';
+    if (steps.length > 0) {
+      stepsHtml += '<div class="steps-area"><div class="step-title">連続ステップ</div>';
+      steps.forEach((st, si) => {
+        stepsHtml += `<div class="step-row">
+          <span class="step-num">${si+1}</span>
+          <input type="number" class="delay-inp" data-i="${i}" data-si="${si}" value="${st.delay||0}" min="0" max="60" step="0.5">
+          <span class="delay-label">秒→</span>
+          <input type="text" class="step-sel-inp" data-i="${i}" data-si="${si}" value="${ESC(st.xpath||'')}" placeholder="セレクタ">
+          <button class="step-pick-btn" data-i="${i}" data-si="${si}">+</button>
+          <button class="step-del-btn" data-i="${i}" data-si="${si}">×</button>
+        </div>`;
+      });
+      stepsHtml += `<button class="add-step-btn" data-i="${i}">+ ステップ追加</button></div>`;
+    } else {
+      stepsHtml += `<div class="steps-area"><button class="add-step-btn" data-i="${i}">+ ステップ追加（マクロ）</button></div>`;
+    }
+
     html += `<div class="sc-card">
       <label>メモ</label>
       <input type="text" class="name-inp" data-i="${i}" value="${ESC(sc.name||'')}" placeholder="例: ダッシュボードへ戻る">
       <label>キー</label>
       <input type="text" class="key-inp" data-i="${i}" value="${ESC(sc.key||'')}" readonly placeholder="クリックしてキーを押す">
-      <label>セレクタ</label>
+      <label>セレクタ（ステップ1）</label>
       <div class="sel-row">
         <input type="text" class="sel-inp" data-i="${i}" value="${ESC(sc.xpath||'')}" placeholder="#id / .class / //xpath">
         <button class="pick-btn" data-i="${i}">+</button>
       </div>
+      ${stepsHtml}
       <button class="del-btn" data-i="${i}">削除</button>
     </div>`;
   });
@@ -447,6 +625,53 @@ function renderPanel() {
       renderBar();
     });
   });
+
+  // ステップ関連イベント
+  panelEl.querySelectorAll('.add-step-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const i = +e.target.dataset.i;
+      if (!shortcuts[i].steps) shortcuts[i].steps = [];
+      shortcuts[i].steps.push({ xpath: '', delay: 1 });
+      saveShortcuts();
+      renderPanel();
+    });
+  });
+
+  panelEl.querySelectorAll('.delay-inp').forEach(inp => {
+    inp.addEventListener('change', (e) => {
+      const i = +e.target.dataset.i, si = +e.target.dataset.si;
+      shortcuts[i].steps[si].delay = parseFloat(e.target.value) || 0;
+      saveShortcuts();
+    });
+  });
+
+  panelEl.querySelectorAll('.step-sel-inp').forEach(inp => {
+    inp.addEventListener('change', (e) => {
+      const i = +e.target.dataset.i, si = +e.target.dataset.si;
+      shortcuts[i].steps[si].xpath = e.target.value;
+      saveShortcuts();
+    });
+  });
+
+  panelEl.querySelectorAll('.step-pick-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const i = +e.target.dataset.i, si = +e.target.dataset.si;
+      // ステップピッカー: idx = 1000*i + si でエンコード
+      const encodedIdx = 1000 + i * 100 + si;
+      chrome.runtime.sendMessage({ type: 'start-picker', idx: encodedIdx });
+      toast('要素をクリック（Escでキャンセル）');
+    });
+  });
+
+  panelEl.querySelectorAll('.step-del-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const i = +e.target.dataset.i, si = +e.target.dataset.si;
+      shortcuts[i].steps.splice(si, 1);
+      if (shortcuts[i].steps.length === 0) delete shortcuts[i].steps;
+      saveShortcuts();
+      renderPanel();
+    });
+  });
 }
 
 function saveShortcuts() {
@@ -485,11 +710,24 @@ chrome.runtime.onMessage.addListener((msg) => {
     renderBar();
     renderPanel();
   }
-  if (msg.type === 'xpath-picked' && msg.idx >= 0 && msg.idx < shortcuts.length) {
-    shortcuts[msg.idx].xpath = msg.xpath;
-    saveShortcuts();
-    renderPanel();
-    toast('セレクタを設定しました');
+  if (msg.type === 'xpath-picked') {
+    if (msg.idx >= 1000) {
+      // ステップピッカー: デコード
+      const decoded = msg.idx - 1000;
+      const i = Math.floor(decoded / 100);
+      const si = decoded % 100;
+      if (shortcuts[i] && shortcuts[i].steps && shortcuts[i].steps[si]) {
+        shortcuts[i].steps[si].xpath = msg.xpath;
+        saveShortcuts();
+        renderPanel();
+        toast('ステップのセレクタを設定しました');
+      }
+    } else if (msg.idx >= 0 && msg.idx < shortcuts.length) {
+      shortcuts[msg.idx].xpath = msg.xpath;
+      saveShortcuts();
+      renderPanel();
+      toast('セレクタを設定しました');
+    }
   }
   if (msg.type === 'shortcuts-updated') {
     loadShortcuts();

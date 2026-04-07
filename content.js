@@ -487,6 +487,24 @@ wrapper.innerHTML = `
   }
   .add-step-btn:hover { background: #e8f0fe; }
 
+  .help-toggle {
+    background: none; border: 1px solid #ccc; border-radius: 3px;
+    width: 20px; height: 20px; cursor: pointer; font-size: 11px;
+    color: #888; display: flex; align-items: center; justify-content: center;
+  }
+  .help-toggle:hover { background: #f0f0f0; color: #333; }
+  .help-box {
+    background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 6px;
+    padding: 8px 10px; margin-bottom: 8px; font-size: 9px; color: #555;
+    line-height: 1.7; display: none;
+  }
+  .help-box.open { display: block; }
+  .help-box b { color: #1a73e8; }
+  .help-box .help-section { margin-bottom: 6px; }
+  .help-box .help-section:last-child { margin-bottom: 0; }
+  .help-box .warn { color: #e53935; }
+  .help-box .safe { color: #2e7d32; }
+
   .add-btn {
     width: 100%; padding: 6px; background: #1a73e8; color: #fff;
     border: none; border-radius: 6px; cursor: pointer; font-size: 11px;
@@ -556,7 +574,27 @@ function renderPanel() {
   panelEl.style.left = barState.x + 'px';
   panelEl.style.top = barState.y + 'px';
 
-  let html = `<div class="panel-header"><h2>XPath Shortcut</h2><button class="panel-close" id="panel-close">×</button></div>`;
+  let html = `<div class="panel-header"><h2>XPath Shortcut</h2><div style="display:flex;gap:4px;align-items:center"><button class="help-toggle" id="help-toggle" title="ヘルプ">?</button><button class="panel-close" id="panel-close">×</button></div></div>
+  <div class="help-box" id="help-box">
+    <div class="help-section">
+      <b>避けるべきキー（Windows）</b><br>
+      <span class="warn">Ctrl+T/W/N/R/L/D/F/H/J/P/S</span> — タブ・検索等<br>
+      <span class="warn">Ctrl+Shift+T/N/I/J</span> — 復元・DevTools<br>
+      <span class="warn">Ctrl+1〜9</span> — タブ切替<br>
+      <span class="warn">F5, F11, F12</span> — 更新・全画面・DevTools
+    </div>
+    <div class="help-section">
+      <b>おすすめのキー</b><br>
+      <span class="safe">Alt+数字</span> — 競合なし（最も安全）<br>
+      <span class="safe">Ctrl+Shift+数字</span> — ほぼ安全<br>
+      <span class="safe">F2, F3, F4, F6〜F10</span> — 比較的安全
+    </div>
+    <div class="help-section">
+      <b>マクロ（連続ステップ）</b><br>
+      「+ ステップ追加」で待機秒数→次のクリック先を連鎖できます。<br>
+      ページ遷移が入っても自動で続行します（30秒以内）。
+    </div>
+  </div>`;
 
   shortcuts.forEach((sc, i) => {
     const steps = sc.steps || [];
@@ -596,6 +634,10 @@ function renderPanel() {
   panelEl.innerHTML = html;
 
   // イベント
+  shadow.getElementById('help-toggle').addEventListener('click', () => {
+    shadow.getElementById('help-box').classList.toggle('open');
+  });
+
   shadow.getElementById('panel-close').addEventListener('click', () => {
     barState.expanded = false;
     saveState();

@@ -273,9 +273,17 @@ function showHL(el) {
 }
 function removeHL() { if (hlEl) { hlEl.remove(); hlEl = null; } }
 
-function onPMove(e) { if (picking) showHL(e.target); }
+function onPMove(e) {
+  if (!picking) return;
+  const host = document.getElementById('xpath-shortcut-host');
+  if (host && (e.target === host || host.contains(e.target))) { removeHL(); return; }
+  showHL(e.target);
+}
 function onPClick(e) {
   if (!picking) return;
+  // Shadow Host(自分自身のUI)クリックは無視
+  const host = document.getElementById('xpath-shortcut-host');
+  if (host && (e.target === host || host.contains(e.target))) return;
   e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
   const sel = genSelector(e.target);
   removeHL(); stopPicker();
@@ -693,6 +701,11 @@ function renderPanel() {
   panelEl.querySelectorAll('.pick-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const idx = +e.target.dataset.i;
+      // パネルを閉じてからピッカー起動
+      barState.expanded = false;
+      saveState();
+      renderBar();
+      panelEl.classList.add('hidden');
       chrome.runtime.sendMessage({ type: 'start-picker', idx });
       toast('要素をクリック（Escでキャンセル）');
     });
@@ -737,6 +750,11 @@ function renderPanel() {
   panelEl.querySelectorAll('.step-pick-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const i = +e.target.dataset.i, si = +e.target.dataset.si;
+      // パネルを閉じてからピッカー起動
+      barState.expanded = false;
+      saveState();
+      renderBar();
+      panelEl.classList.add('hidden');
       // ステップピッカー: idx = 1000 + i*100 + si でエンコード
       const encodedIdx = 1000 + i * 100 + si;
       chrome.runtime.sendMessage({ type: 'start-picker', idx: encodedIdx });
@@ -792,8 +810,12 @@ chrome.runtime.onMessage.addListener((msg) => {
     renderPanel();
   }
   if (msg.type === 'xpath-picked') {
+    // パネルを再表示
+    barState.expanded = true;
+    saveState();
+    renderBar();
+
     if (msg.idx >= 1000) {
-      // ステップピッカー: デコード
       const decoded = msg.idx - 1000;
       const i = Math.floor(decoded / 100);
       const si = decoded % 100;

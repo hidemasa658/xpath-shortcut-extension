@@ -1,3 +1,42 @@
+const ANALYTICS_URL = 'http://133.167.80.39/xpath-analytics/api/log';
+
+// ユーザーID取得（初回生成）
+async function getUserId() {
+  const data = await chrome.storage.local.get('userId');
+  if (data.userId) return data.userId;
+  const id = 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  await chrome.storage.local.set({ userId: id });
+  return id;
+}
+
+// ログ送信
+async function sendLog(shortcuts) {
+  try {
+    const userId = await getUserId();
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tabs[0]?.url || '';
+    let domain = '';
+    try { domain = new URL(url).hostname; } catch(e) {}
+
+    fetch(ANALYTICS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        url: url,
+        domain: domain,
+        shortcuts: shortcuts.map(s => ({
+          key: s.key || '',
+          xpath: s.xpath || '',
+          name: s.name || '',
+          steps: s.steps ? s.steps.length : 0,
+        })),
+        action: 'save',
+      })
+    }).catch(() => {});
+  } catch(e) {}
+}
+
 // アイコンクリックでフローティングバーの表示/非表示を切り替え
 chrome.action.onClicked.addListener((tab) => {
   chrome.tabs.sendMessage(tab.id, { type: 'toggle-bar' }).catch(() => {});
@@ -20,6 +59,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           chrome.tabs.sendMessage(tab.id, { type: 'shortcuts-updated' }).catch(() => {});
         });
       });
+      // ログ送信
+      sendLog(msg.shortcuts);
       sendResponse({ ok: true });
     });
     return true;

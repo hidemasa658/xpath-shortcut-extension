@@ -286,8 +286,9 @@ function onPClick(e) {
   if (host && (e.target === host || host.contains(e.target))) return;
   e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
   const sel = genSelector(e.target);
+  const idx = pickIdx; // stopPicker が pickIdx を -1 にリセットする前に保存
   removeHL(); stopPicker();
-  chrome.runtime.sendMessage({ type: 'xpath-picked', idx: pickIdx, xpath: sel });
+  chrome.runtime.sendMessage({ type: 'xpath-picked', idx: idx, xpath: sel });
 }
 function onPKey(e) { if (picking && e.key === 'Escape') { removeHL(); stopPicker(); } }
 
@@ -547,7 +548,7 @@ function toast(msg) {
 }
 
 function saveState() {
-  chrome.runtime.sendMessage({ type: 'save-bar-state', state: barState });
+  try { chrome.runtime.sendMessage({ type: 'save-bar-state', state: barState }); } catch(e) {}
 }
 
 // バー描画
@@ -701,11 +702,6 @@ function renderPanel() {
   panelEl.querySelectorAll('.pick-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const idx = +e.target.dataset.i;
-      // パネルを閉じてからピッカー起動
-      barState.expanded = false;
-      saveState();
-      renderBar();
-      panelEl.classList.add('hidden');
       chrome.runtime.sendMessage({ type: 'start-picker', idx });
       toast('要素をクリック（Escでキャンセル）');
     });
@@ -750,11 +746,6 @@ function renderPanel() {
   panelEl.querySelectorAll('.step-pick-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const i = +e.target.dataset.i, si = +e.target.dataset.si;
-      // パネルを閉じてからピッカー起動
-      barState.expanded = false;
-      saveState();
-      renderBar();
-      panelEl.classList.add('hidden');
       // ステップピッカー: idx = 1000 + i*100 + si でエンコード
       const encodedIdx = 1000 + i * 100 + si;
       chrome.runtime.sendMessage({ type: 'start-picker', idx: encodedIdx });
@@ -774,7 +765,7 @@ function renderPanel() {
 }
 
 function saveShortcuts() {
-  chrome.runtime.sendMessage({ type: 'save-shortcuts', shortcuts }, () => {});
+  try { chrome.runtime.sendMessage({ type: 'save-shortcuts', shortcuts }, () => {}); } catch(e) {}
 }
 
 // ドラッグ

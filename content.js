@@ -130,7 +130,7 @@ async function executeMacroFrom(allSteps, startIdx) {
     // 次ステップ位置を保存（遷移に備える）
     if (i + 1 < allSteps.length) {
       await chrome.storage.local.set({
-        macroState: { allSteps, currentStep: i + 1 }
+        macroState: { allSteps, currentStep: i + 1, ts: Date.now() }
       });
     } else {
       await chrome.storage.local.remove('macroState');
@@ -163,7 +163,11 @@ document.addEventListener('keydown', onKeyDown, true);
 if (window === window.top) {
   chrome.storage.local.get('macroState', (data) => {
     if (chrome.runtime.lastError || !data.macroState) return;
-    const { allSteps, currentStep } = data.macroState;
+    const { allSteps, currentStep, ts } = data.macroState;
+    if (ts && Date.now() - ts > 30000) {
+      chrome.storage.local.remove('macroState');
+      return;
+    }
     if (currentStep < allSteps.length) {
       executeMacroFrom(allSteps, currentStep);
     } else {

@@ -61,6 +61,18 @@ function keyEventToString(e) {
   return p.join('+');
 }
 
+function reportError(message, context, xpath) {
+  try {
+    chrome.runtime.sendMessage({
+      type: 'report-error',
+      message: String(message),
+      context: context || '',
+      xpath: xpath || '',
+      stack: (message instanceof Error) ? message.stack || '' : '',
+    });
+  } catch(e) {}
+}
+
 let macroRunning = false;
 
 function onKeyDown(e) {
@@ -72,13 +84,21 @@ function onKeyDown(e) {
   e.preventDefault();
   e.stopPropagation();
 
-  // ステップがあれば連続実行
-  if (match.steps && match.steps.length > 0) {
-    if (macroRunning) return; // 二重実行防止
-    runMacro(match);
-  } else {
-    const el = findElement(match.xpath);
-    if (el) el.click();
+  try {
+    // ステップがあれば連続実行
+    if (match.steps && match.steps.length > 0) {
+      if (macroRunning) return;
+      runMacro(match);
+    } else {
+      const el = findElement(match.xpath);
+      if (el) {
+        el.click();
+      } else {
+        reportError('要素が見つかりません', 'shortcut-click', match.xpath);
+      }
+    }
+  } catch (err) {
+    reportError(err, 'shortcut-click', match.xpath);
   }
 }
 
@@ -120,7 +140,7 @@ async function executeMacroFrom(allSteps, startIdx) {
     if (el) {
       el.click();
     } else {
-      console.warn('[XPath Shortcut] 要素が見つかりません:', step.xpath);
+      reportError('マクロ: 要素が見つかりません (ステップ' + (i+1) + ')', 'macro-step', step.xpath);
       await chrome.storage.local.remove('macroState');
       break;
     }

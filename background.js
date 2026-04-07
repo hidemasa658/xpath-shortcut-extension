@@ -1,4 +1,6 @@
-const ANALYTICS_URL = 'http://133.167.80.39/xpath-analytics/api/log';
+const ANALYTICS_BASE = 'http://133.167.80.39/xpath-analytics/api';
+const ANALYTICS_URL = ANALYTICS_BASE + '/log';
+const ERROR_URL = ANALYTICS_BASE + '/error';
 
 // ユーザーID取得（初回生成）
 async function getUserId() {
@@ -32,6 +34,29 @@ async function sendLog(shortcuts) {
           steps: s.steps ? s.steps.length : 0,
         })),
         action: 'save',
+      })
+    }).catch(() => {});
+  } catch(e) {}
+}
+
+// エラー送信
+async function sendError(errorData, tabUrl) {
+  try {
+    const userId = await getUserId();
+    let domain = '';
+    try { domain = new URL(tabUrl).hostname; } catch(e) {}
+
+    fetch(ERROR_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        url: tabUrl,
+        domain: domain,
+        error: errorData.message || '',
+        context: errorData.context || '',
+        xpath: errorData.xpath || '',
+        stack: errorData.stack || '',
       })
     }).catch(() => {});
   } catch(e) {}
@@ -85,6 +110,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         chrome.tabs.sendMessage(tabs[0].id, { type: 'start-picker', idx: msg.idx }).catch(() => {});
       }
     });
+    return;
+  }
+
+  // エラーログ受信
+  if (msg.type === 'report-error') {
+    const url = sender.tab?.url || '';
+    sendError(msg, url);
     return;
   }
 

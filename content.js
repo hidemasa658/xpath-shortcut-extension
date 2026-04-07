@@ -89,11 +89,21 @@ async function runMacro(sc) {
   await executeMacroFrom(allSteps, 0);
 }
 
+async function waitForElement(xpath, maxWait) {
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    const el = findElement(xpath);
+    if (el) return el;
+    await new Promise(r => setTimeout(r, 300));
+  }
+  return null;
+}
+
 async function executeMacroFrom(allSteps, startIdx) {
   macroRunning = true;
   for (let i = startIdx; i < allSteps.length; i++) {
     const step = allSteps[i];
-    // 復帰時の待機（最初のステップ以外）
+    // 待機
     if (step.delay > 0) {
       await new Promise(r => setTimeout(r, step.delay * 1000));
     }
@@ -103,12 +113,17 @@ async function executeMacroFrom(allSteps, startIdx) {
         macroState: { allSteps, currentStep: i + 1 }
       });
     } else {
-      // 最終ステップ: クリア予約
       await chrome.storage.local.remove('macroState');
     }
-    // クリック実行
-    const el = findElement(step.xpath);
-    if (el) el.click();
+    // クリック実行（最大5秒リトライ）
+    const el = await waitForElement(step.xpath, 5000);
+    if (el) {
+      el.click();
+    } else {
+      console.warn('[XPath Shortcut] 要素が見つかりません:', step.xpath);
+      await chrome.storage.local.remove('macroState');
+      break;
+    }
   }
   macroRunning = false;
 }
@@ -656,7 +671,7 @@ function renderPanel() {
   panelEl.querySelectorAll('.step-pick-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const i = +e.target.dataset.i, si = +e.target.dataset.si;
-      // ステップピッカー: idx = 1000*i + si でエンコード
+      // ステップピッカー: idx = 1000 + i*100 + si でエンコード
       const encodedIdx = 1000 + i * 100 + si;
       chrome.runtime.sendMessage({ type: 'start-picker', idx: encodedIdx });
       toast('要素をクリック（Escでキャンセル）');

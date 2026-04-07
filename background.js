@@ -68,6 +68,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'save-bar-state') {
     chrome.storage.local.set({ barState: msg.state });
+    return;
   }
 
   if (msg.type === 'get-bar-state') {
@@ -84,5 +85,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         chrome.tabs.sendMessage(tabs[0].id, { type: 'start-picker', idx: msg.idx }).catch(() => {});
       }
     });
+    return;
+  }
+
+  // ピッカー結果をタブ全フレームに中継
+  if (msg.type === 'xpath-picked') {
+    if (sender.tab) {
+      chrome.tabs.sendMessage(sender.tab.id, msg).catch(() => {});
+    }
+    return;
   }
 });
